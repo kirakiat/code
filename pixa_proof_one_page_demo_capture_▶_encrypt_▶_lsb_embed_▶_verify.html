@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PixaProof — Secure Capture Demo (Encryption + LSB Stego)</title>
+  <style>
+    :root { --bg:#0f172a; --card:#111827; --muted:#94a3b8; --ok:#22c55e; --warn:#eab308; --err:#ef4444; --accent:#f97316; }
+    html,body{margin:0;height:100%;background:var(--bg);color:#e5e7eb;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,Apple Color Emoji,Segoe UI Emoji}
+    .wrap{max-width:1100px;margin:0 auto;padding:20px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 10px 25px rgb(0 0 0 / .25)}
+    h1{font-size:22px;margin:0 0 6px}
+    h2{font-size:16px;margin:0 0 10px;color:#cbd5e1}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    button{background:var(--accent);border:0;border-radius:999px;color:white;padding:10px 16px;font-weight:700;cursor:pointer}
+    button[disabled]{opacity:.35;cursor:not-allowed}
+    input,select{background:#0b1220;border:1px solid #1f2937;border-radius:10px;color:#e5e7eb;padding:10px 12px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px}
+    .tag{border-radius:999px;background:#0b1220;border:1px solid #1f2937;padding:6px 10px;color:#cbd5e1}
+    .good{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--err)}
+    .pill{display:inline-flex;align-items:center;gap:6px}
+    .media{aspect-ratio:4/3;background:black;border-radius:12px;overflow:hidden}
+    .footer{opacity:.65;text-align:center;margin-top:14px}
+    .small{font-size:12px;color:#94a3b8}
+    details{border:1px dashed #243042;border-radius:12px;padding:10px}
+    summary{cursor:pointer;color:#e2e8f0}
+    .cols{columns:2;gap:16px}
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr} .cols{columns:1} }
+    canvas{max-width:100%;background:#000;border-radius:12px}
+    .bar{height:6px;background:#0b1220;border-radius:999px;overflow:hidden}
+    .bar>span{display:block;height:100%;background:linear-gradient(90deg,#34d399,#22d3ee);width:0}
+    a.btn{display:inline-block;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🔐 PixaProof — Secure Media Capture (Interactive ▶ Encrypt ▶ LSB Embed ▶ Verify)</h1>
+    <div class="small">Demo: randomized live prompts + metadata → <b>AES‑GCM encryption</b> → <b>LSB steganography</b> into image pixels. Extract & verify on the right.</div>
+
+    <div class="grid" style="margin-top:14px">
+      <!-- LEFT: CAPTURE & ENCODE -->
+      <section class="card">
+        <h2>1) Live Capture & Stego-Embed</h2>
+        <div class="row" style="justify-content:space-between">
+          <div class="row">
+            <label>Passphrase:</label>
+            <input type="password" id="pass" placeholder="Strong secret…" size="18" />
+            <label>Include GPS</label>
+            <select id="gpsMode"><option value="ask">Ask</option><option value="off">Off</option></select>
+          </div>
+          <div class="row">
+            <span class="tag pill" id="camState">📷 camera: idle</span>
+            <span class="tag pill" id="motionState">📱 motion: idle</span>
+          </div>
+        </div>
+
+        <div class="grid" style="margin-top:10px;grid-template-columns:1.2fr .8fr;gap:12px">
+          <div>
+            <div class="media"><video id="video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover"></video></div>
+            <div class="row" style="margin-top:10px">
+              <button id="btnStart">Start camera</button>
+              <button id="btnPrompts" disabled>Run randomized prompts</button>
+              <button id="btnCapture" disabled>Capture & Embed</button>
+              <button id="btnStop" disabled>Stop</button>
+            </div>
+            <div class="bar" style="margin-top:10px"><span id="prog"></span></div>
+            <div class="small" id="promptMsg">—</div>
+          </div>
+          <div>
+            <canvas id="canvas" width="1280" height="960"></canvas>
+            <div class="row" style="margin-top:8px">
+              <a id="dl" class="btn" download="pixaproof-embedded.png"><button disabled>Download Embedded PNG</button></a>
+              <button id="btnShowPlain" disabled>Show plaintext metadata</button>
+            </div>
+            <details style="margin-top:8px">
+              <summary>Plaintext metadata (before encryption)</summary>
+              <pre class="mono" id="plain"></pre>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT: EXTRACT & VERIFY -->
+      <section class="card">
+        <h2>2) Extract, Decrypt & Verify</h2>
+        <div class="row">
+          <input type="password" id="pass2" placeholder="Same passphrase…" size="18" />
+          <input type="file" id="file" accept="image/*" />
+          <button id="btnExtract">Extract & Verify</button>
+        </div>
+        <div class="grid" style="margin-top:10px;grid-template-columns:1fr 1fr">
+          <div>
+            <h3 class="small">Decoded JSON</h3>
+            <pre class="mono" id="outJSON">—</pre>
+          </div>
+          <div>
+            <h3 class="small">Verification</h3>
+            <div id="verifyBox" class="small">—</div>
+          </div>
+        </div>
+        <details style="margin-top:10px">
+          <summary>Implementation notes</summary>
+          <div class="cols small">
+            <div>• AES‑GCM (WebCrypto) with PBKDF2 key derivation (random 16‑byte salt, 12‑byte IV).<br>• LSB embeds a header magic <span class="mono">PXPF</span>, payload length, salt, IV, then ciphertext.<br>• Prompts (randomized): tilt left→right, rotate ~360°, cover→uncover lens (brightness change).<br>• Metadata: device/userAgent, ts, resolution, randomized nonce, (optional) GPS, motion stats, prompt outcomes.</div>
+            <div>• Works best over HTTPS + mobile browsers. iOS requires user gesture for motion permission.<br>• This is a demo — not production‑grade security. Use robust threat models, anti‑ml attacks, watermarking, and server‑side checks.</div>
+          </div>
+        </details>
+      </section>
+    </div>
+
+    <div class="footer small">© PixaProof demo. No libraries. Client‑side only. For R&D / patent illustration.</div>
+  </div>
+
+<script>
+// ===== Utilities =====
+const $ = (id)=>document.getElementById(id);
+const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+function bytesToBits(u8){ const bits=[]; for(let b of u8){ for(let i=7;i>=0;i--) bits.push((b>>i)&1); } return bits; }
+function bitsToBytes(bits){ const len = bits.length - (bits.length%8); const out = new Uint8Array(len/8); let j=0; for(let i=0;i<len;i+=8){ let v=0; for(let k=0;k<8;k++) v=(v<<1)|bits[i+k]; out[j++]=v; } return out; }
+function strToBytes(str){ return new TextEncoder().encode(str); }
+function bytesToStr(u8){ return new TextDecoder().decode(u8); }
+function concatU8(...arrs){ let n=0; for(const a of arrs)n+=a.length; const out=new Uint8Array(n); let o=0; for(const a of arrs){ out.set(a,o); o+=a.length; } return out; }
+function u32le(n){ const b=new Uint8Array(4); const v=new DataView(b.buffer); v.setUint32(0,n,true); return b; }
+function readU32le(u8,off){ return new DataView(u8.buffer,u8.byteOffset+off,4).getUint32(0,true); }
+function randomBytes(n){ const b=new Uint8Array(n); crypto.getRandomValues(b); return b; }
+
+// ===== Global state =====
+let stream=null, video=$('video'), canvas=$('canvas'), ctx=canvas.getContext('2d');
+let motionPerm=false, motionSamples=[]; // {t,alpha,beta,gamma}
+let promptSequence=[], promptResults=[];
+
+// ===== Camera control =====
+async function startCamera(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment", width:{ideal:1280}, height:{ideal:960}}, audio:false});
+    video.srcObject = stream; $('camState').textContent='📷 camera: on'; $('btnStop').disabled=false; $('btnPrompts').disabled=false; $('btnCapture').disabled=true;
+  }catch(e){ alert('Camera error: '+e); }
+}
+function stopCamera(){ if(stream){ for(const tr of stream.getTracks()) tr.stop(); stream=null; } $('camState').textContent='📷 camera: off'; }
+
+// ===== Motion permissions & sampling =====
+async function ensureMotion(){
+  try{
+    if(typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
+      const s = await DeviceMotionEvent.requestPermission(); motionPerm = (s==='granted');
+    }else{ motionPerm=true; }
+  }catch(e){ motionPerm=false; }
+  $('motionState').textContent = '📱 motion: '+(motionPerm?'ready':'unavailable');
+}
+
+window.addEventListener('deviceorientation', (e)=>{
+  if(!motionPerm) return;
+  const {alpha,beta,gamma}=e; motionSamples.push({t:performance.now(),alpha,beta,gamma});
+  if(motionSamples.length>1000) motionSamples.shift();
+});
+
+// ===== Prompt engine =====
+function avgLuma(imgData){ // simple Y' from RGB
+  const d=imgData.data; let s=0; for(let i=0;i<d.length;i+=4){ s += (0.2126*d[i] + 0.7152*d[i+1] + 0.0722*d[i+2]); } return s/(d.length/4); }
+async function waitBrightnessChange(dir='+', delta=25, timeout=7000){
+  const start = await frameLuma(); const target = start + (dir==='+'?delta:-delta);
+  const t0=performance.now();
+  while(performance.now()-t0 < timeout){
+    const L = await frameLuma();
+    if((dir==='+' && L>=target) || (dir==='-' && L<=target)) return true;
+    await sleep(120);
+  }
+  return false;
+}
+async function frameLuma(){ if(!video.videoWidth) return 0; const w=320,h=240; const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h; const c=tmp.getContext('2d'); c.drawImage(video,0,0,w,h); return avgLuma(c.getImageData(0,0,w,h)); }
+
+async function doPrompt(p){
+  $('promptMsg').textContent = 'Prompt: '+p.label;
+  if(p.type==='tiltLR'){
+    const start = motionSamples.at(-1)??{gamma:0}; const t0=performance.now(); let left=false,right=false;
+    while(performance.now()-t0<8000){
+      const s=motionSamples.at(-1); if(!s){ await sleep(100); continue; }
+      if(s.gamma <= -20) left=true; if(s.gamma >= 20) right=true;
+      if(left&&right) return true; await sleep(80);
+    }
+    return false;
+  }
+  if(p.type==='rotate360'){
+    const t0=performance.now(); const start = motionSamples.at(-1)?.alpha ?? 0; let last=start, cumul=0;
+    while(performance.now()-t0<10000){
+      const a = (motionSamples.at(-1)?.alpha ?? last);
+      let diff = a - last; if(diff>180) diff-=360; if(diff<-180) diff+=360; cumul += Math.abs(diff); last=a; if(cumul>=320) return true; await sleep(80);
+    }
+    return false;
+  }
+  if(p.type==='coverUncover'){
+    $('promptMsg').textContent = 'Prompt: Cover the lens with your hand, then uncover';
+    const covered = await waitBrightnessChange('-', 30, 8000);
+    if(!covered) return false;
+    $('promptMsg').textContent = 'Good. Now uncover';
+    const uncovered = await waitBrightnessChange('+', 30, 8000);
+    return !!uncovered;
+  }
+}
+
+async function runPrompts(){
+  await ensureMotion();
+  if(!video.srcObject){ alert('Start camera first'); return; }
+  const all=[
+    {type:'tiltLR', label:'Tilt left → right'},
+    {type:'rotate360', label:'Rotate device ~360°'},
+    {type:'coverUncover', label:'Cover → Uncover lens'}
+  ];
+  // choose 2–3 prompts randomly
+  promptSequence = all.sort(()=>Math.random()-0.5).slice(0, 3*Math.random()>0.5?3:2);
+  promptResults = [];
+  $('prog').style.width='0%';
+  for(let i=0;i<promptSequence.length;i++){
+    const ok = await doPrompt(promptSequence[i]);
+    promptResults.push({type:promptSequence[i].type, ok, at: Date.now()});
+    $('prog').style.width = Math.round(((i+1)/promptSequence.length)*100)+'%';
+    if(!ok){ $('promptMsg').innerHTML = '❌ Prompt failed: '+promptSequence[i].label; $('btnCapture').disabled=true; return; }
+  }
+  $('promptMsg').innerHTML = '✅ Prompts completed.'; $('btnCapture').disabled=false;
+}
+
+// ===== Geolocation =====
+async function getGPS(){ return new Promise((resolve)=>{
+  if(!navigator.geolocation) return resolve(null);
+  navigator.geolocation.getCurrentPosition(
+    p=>resolve({lat:+p.coords.latitude.toFixed(6), lon:+p.coords.longitude.toFixed(6), acc:p.coords.accuracy}),
+    _=>resolve(null), {enableHighAccuracy:true, timeout:5000, maximumAge:0}
+  );
+}); }
+
+// ===== Crypto (PBKDF2 + AES-GCM) =====
+async function deriveKey(pass, salt){
+  const baseKey = await crypto.subtle.importKey('raw', strToBytes(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:120000, hash:'SHA-256'}, baseKey, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+}
+async function encryptPayload(pass, jsonU8){
+  const salt = randomBytes(16); const iv = randomBytes(12); const key = await deriveKey(pass, salt);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, jsonU8));
+  return {salt, iv, ct};
+}
+async function decryptPayload(pass, salt, iv, ct){
+  const key = await deriveKey(pass, salt);
+  const pt = new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ct));
+  return pt;
+}
+
+// ===== LSB Steganography =====
+function embedLSB(imgData, payload){
+  const MAGIC = strToBytes('PXPF');
+  const header = concatU8(MAGIC, u32le(payload.ct.length), payload.salt, payload.iv);
+  const full = concatU8(header, payload.ct);
+  const bits = bytesToBits(full);
+  const d = imgData.data; const capacity = Math.floor(d.length/4); // 1 bit per pixel (use R channel)
+  if(bits.length > capacity) throw new Error('Payload too large for this image. Use higher resolution.');
+  for(let i=0,bi=0;i<capacity;i++,bi++){
+    const px = i*4; if(bi>=bits.length) break; d[px] = (d[px] & 0xFE) | bits[bi];
+  }
+  return {totalBits: bits.length};
+}
+
+function extractLSB(imgData){
+  const d = imgData.data; const capacity = Math.floor(d.length/4);
+  // read first 4*8 bits for magic + 4 bytes length + 16 salt + 12 iv
+  const needHeadBits = (4 + 4 + 16 + 12) * 8; const headBits=[];
+  for(let i=0;i<Math.min(capacity, needHeadBits);i++){ headBits.push((d[i*4] & 1)); }
+  const head = bitsToBytes(headBits);
+  if(bytesToStr(head.slice(0,4))!=='PXPF') throw new Error('No PXPF magic. Not an embedded image.');
+  const len = readU32le(head,4);
+  const salt = head.slice(8, 24);
+  const iv = head.slice(24, 36);
+  const totalBits = (4+4+16+12+len)*8; if(totalBits>capacity) throw new Error('Corrupt/too small image.');
+  const bits=[]; for(let i=0;i<totalBits;i++){ bits.push((d[i*4] & 1)); }
+  const full = bitsToBytes(bits); const ct = full.slice(4+4+16+12);
+  return {salt, iv, ct};
+}
+
+// ===== Capture & Embed flow =====
+async function captureAndEmbed(){
+  const pass = $('pass').value; if(!pass){ alert('Enter passphrase'); return; }
+  if(!video.videoWidth){ alert('Camera not ready'); return; }
+  // draw to canvas
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight; ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+  // (optional) GPS prompt
+  let gps=null; if($('gpsMode').value==='ask'){ gps = await getGPS(); }
+
+  // collect metadata
+  const now = new Date();
+  const meta = {
+    ts: now.toISOString(),
+    nonce: Array.from(randomBytes(8)).map(x=>x.toString(16).padStart(2,'0')).join(''),
+    device: navigator.userAgent,
+    res: {w: canvas.width, h: canvas.height},
+    gps,
+    prompts: promptSequence.map((p,i)=>({type:p.type, ok: !!(promptResults[i]?.ok)})),
+    motion: summarizeMotion(),
+  };
+  $('plain').textContent = JSON.stringify(meta,null,2);
+
+  // encrypt
+  const enc = await encryptPayload(pass, strToBytes(JSON.stringify(meta)));
+
+  // embed into current canvas frame
+  const imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  try{
+    embedLSB(imgData, enc);
+  }catch(e){ alert(e.message); return; }
+  ctx.putImageData(imgData,0,0);
+
+  // offer download
+  const url = canvas.toDataURL('image/png'); $('dl').href=url; $('dl').querySelector('button').disabled=false; $('btnShowPlain').disabled=false;
+}
+
+function summarizeMotion(){
+  if(!motionSamples.length) return null;
+  const n = motionSamples.length; const a=motionSamples[motionSamples.length-1];
+  // basic stats over last ~2s
+  const T=2000, now=performance.now(); const recent = motionSamples.filter(s=>now-s.t<=T);
+  const rng = (arr,k)=>{ const vals=arr.map(x=>x[k]).filter(v=>typeof v==='number'); return vals.length? (Math.max(...vals)-Math.min(...vals)) : null };
+  return {
+    samples: recent.length,
+    rngAlpha: rng(recent,'alpha'),
+    rngBeta: rng(recent,'beta'),
+    rngGamma: rng(recent,'gamma')
+  };
+}
+
+// ===== Extraction & Verify =====
+$('btnExtract').addEventListener('click', async()=>{
+  const pass=$('pass2').value; if(!pass){ alert('Enter passphrase'); return; }
+  const f=$('file').files?.[0]; if(!f){ alert('Choose an image'); return; }
+  const img = new Image(); img.onload=async()=>{
+    const c=document.createElement('canvas'); c.width=img.width; c.height=img.height; const cx=c.getContext('2d'); cx.drawImage(img,0,0);
+    const data = cx.getImageData(0,0,c.width,c.height);
+    let pkg; try{ pkg = extractLSB(data); }catch(e){ $('outJSON').textContent='Error: '+e.message; return; }
+    try{
+      const pt = await decryptPayload(pass, pkg.salt, pkg.iv, pkg.ct);
+      const json = JSON.parse(bytesToStr(pt));
+      $('outJSON').textContent = JSON.stringify(json,null,2);
+      // Simple verification heuristics
+      const issues=[]; if(!json.ts||!json.nonce) issues.push('Missing ts/nonce');
+      if(json.prompts && !json.prompts.every(p=>p.ok)) issues.push('One or more prompts failed');
+      if(json.res && (json.res.w*json.res.h < 640*480)) issues.push('Low resolution');
+      $('verifyBox').innerHTML = issues.length? ('<span class="bad">⚠ Verification concerns:</span><br>• '+issues.join('<br>• ')) : '<span class="good">✔ Metadata decrypted and looks consistent.</span>';
+    }catch(e){ $('outJSON').textContent='Decryption failed (wrong pass or corrupt data).'; $('verifyBox').innerHTML='<span class="bad">✖ Decryption failed</span>'; }
+  }; img.onerror=()=>alert('Failed to load image'); img.src=URL.createObjectURL(f);
+});
+
+// ===== Wire UI =====
+$('btnStart').addEventListener('click', async()=>{ await startCamera(); });
+$('btnStop').addEventListener('click', ()=>{ stopCamera(); $('btnCapture').disabled=true; $('btnPrompts').disabled=true; });
+$('btnPrompts').addEventListener('click', runPrompts);
+$('btnCapture').addEventListener('click', captureAndEmbed);
+$('btnShowPlain').addEventListener('click', ()=>{ const det=$('plain').parentElement; det.open=true; });
+
+// init
+(async()=>{ $('camState').textContent='📷 camera: idle'; $('motionState').textContent='📱 motion: idle'; })();
+</script>
+</body>
+</html>
